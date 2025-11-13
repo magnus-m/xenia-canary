@@ -207,6 +207,24 @@ class D3D12CommandProcessor final : public CommandProcessor {
   void ReleaseScratchGPUBuffer(ID3D12Resource* buffer,
                                D3D12_RESOURCE_STATES new_state);
 
+  // ----------------------
+  // Occlusion query support
+  // ----------------------
+  struct OcclusionQuery {
+    uint32_t guest_address;
+    uint32_t query_index;
+    bool ended;
+  };
+  static constexpr uint32_t kMaxOcclusionQueriesPerFrame = 256;
+
+  void InitializeOcclusionResources();
+  void ShutdownOcclusionResources();
+  void ResetOcclusionQueries();
+  bool BeginOcclusionQuery(uint32_t guest_address);
+  bool EndOcclusionQuery(uint32_t guest_address);
+  void ResolveOcclusionQueries();
+  void DownloadOcclusionQueryResults();
+
   // Returns a pipeline with deferred creation by its handle. May return nullptr
   // if failed to create the pipeline.
   ID3D12PipelineState* GetD3D12PipelineByHandle(void* handle) const {
@@ -694,6 +712,14 @@ class D3D12CommandProcessor final : public CommandProcessor {
 
   ID3D12Resource* readback_buffer_ = nullptr;
   uint32_t readback_buffer_size_ = 0;
+
+  Microsoft::WRL::ComPtr<ID3D12QueryHeap> occlusion_query_heap_;
+  Microsoft::WRL::ComPtr<ID3D12Resource> occlusion_readback_buffer_;
+  OcclusionQuery occlusion_queries_[kMaxOcclusionQueriesPerFrame];
+  uint32_t occlusion_query_count_ = 0;
+  bool occlusion_queries_dirty_ = false;
+  bool occlusion_query_resolve_in_flight_ = false;
+  uint64_t occlusion_query_resolve_submission_ = 0;
 
   // The current fixed-function drawing state.
   D3D12_VIEWPORT ff_viewport_;

@@ -145,7 +145,6 @@ bool VulkanCommandProcessor::ExecutePacketType3_EVENT_WRITE_ZPD(
   bool is_end = is_end_via_z_pass || is_end_via_z_fail;
 
   if (!is_end) {
-    std::memset(sample_counts, 0, sizeof(xenos::xe_gpu_depth_sample_counts));
     if (!BeginGuestOcclusionQuery(sample_count_addr)) {
       DisableHostOcclusionQueries();
       return CommandProcessor::ExecutePacketType3_EVENT_WRITE_ZPD(packet,
@@ -154,6 +153,7 @@ bool VulkanCommandProcessor::ExecutePacketType3_EVENT_WRITE_ZPD(
     return true;
   }
 
+  std::memset(sample_counts, 0, sizeof(xenos::xe_gpu_depth_sample_counts));
   if (!EndGuestOcclusionQuery(sample_count_addr)) {
     DisableHostOcclusionQueries();
     return CommandProcessor::ExecutePacketType3_EVENT_WRITE_ZPD(packet, count);
@@ -3100,6 +3100,7 @@ bool VulkanCommandProcessor::BeginGuestOcclusionQuery(
     uint32_t sample_count_address) {
   if (!use_host_occlusion_queries_ || occlusion_query_pool_ == VK_NULL_HANDLE ||
       occlusion_query_readback_mapping_ == nullptr) {
+    DisableHostOcclusionQueries();
     return false;
   }
   if (active_occlusion_query_.valid) {
@@ -3126,6 +3127,7 @@ bool VulkanCommandProcessor::EndGuestOcclusionQuery(
   if (!use_host_occlusion_queries_ || !active_occlusion_query_.valid ||
       occlusion_query_pool_ == VK_NULL_HANDLE ||
       occlusion_query_readback_mapping_ == nullptr) {
+    DisableHostOcclusionQueries();
     return false;
   }
   if (!BeginSubmission(true)) {

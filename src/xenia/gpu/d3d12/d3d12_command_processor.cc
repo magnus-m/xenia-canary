@@ -25,6 +25,8 @@
 #include "xenia/ui/d3d12/d3d12_presenter.h"
 #include "xenia/ui/d3d12/d3d12_util.h"
 
+using xe::gpu::xenos::xe_gpu_depth_sample_counts;
+
 DEFINE_bool(d3d12_bindless, true,
             "Use bindless resources where available - may improve performance, "
             "but may make debugging more complicated.",
@@ -3749,12 +3751,14 @@ bool D3D12CommandProcessor::ExecutePacketType3_EVENT_WRITE(uint32_t packet,
       bool is_end_via_z_fail =
           sample_counts->ZFail_A == kD3D12OcclusionQueryFinishedToken &&
           sample_counts->ZFail_B == kD3D12OcclusionQueryFinishedToken;
+      bool is_query_end = is_end_via_z_pass || is_end_via_z_fail;
       std::memset(sample_counts, 0, sizeof(*sample_counts));
-      if (is_end_via_z_pass || is_end_via_z_fail) {
-        bool host_query_started = BeginOcclusionQuery(sample_count_address);
-        if (!host_query_started) {
+      if (is_query_end) {
+        if (!EndOcclusionQuery(sample_count_address)) {
           WriteFakeOcclusionSample(sample_counts);
         }
+      } else {
+        BeginOcclusionQuery(sample_count_address);
       }
     }
   }

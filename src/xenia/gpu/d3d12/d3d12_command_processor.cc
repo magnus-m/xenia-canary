@@ -41,8 +41,7 @@ DECLARE_bool(clear_memory_page_state);
 
 namespace {
 
-constexpr uint32_t kD3D12OcclusionQueryFinishedToken =
-    xe::byte_swap(0xFFFFFEED);
+const uint32_t kD3D12OcclusionQueryFinishedToken = xe::byte_swap(0xFFFFFEED);
 
 uint32_t GetNextFakeOcclusionSampleCount() {
   static uint32_t fake_samples =
@@ -5389,10 +5388,12 @@ void D3D12CommandProcessor::WriteGammaRampSRV(
   device->CreateShaderResourceView(gamma_ramp_buffer_.Get(), &desc, handle);
 }
 
+#define COMMAND_PROCESSOR_CUSTOM_EVENT_WRITE 1
 #define COMMAND_PROCESSOR D3D12CommandProcessor
 
 #include "../pm4_command_processor_implement.h"
 #undef COMMAND_PROCESSOR
+#undef COMMAND_PROCESSOR_CUSTOM_EVENT_WRITE
 }  // namespace d3d12
 }  // namespace gpu
 }  // namespace xe

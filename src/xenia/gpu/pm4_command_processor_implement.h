@@ -864,6 +864,7 @@ XE_FORCEINLINE
 void COMMAND_PROCESSOR::WriteEventInitiator(uint32_t value) XE_RESTRICT {
   register_file_->values[XE_GPU_REG_VGT_EVENT_INITIATOR] = value;
 }
+#ifndef COMMAND_PROCESSOR_CUSTOM_EVENT_WRITE
 bool COMMAND_PROCESSOR::ExecutePacketType3_EVENT_WRITE(
     uint32_t packet, uint32_t count) XE_RESTRICT {
   // generate an event that creates a write to memory when completed
@@ -880,6 +881,7 @@ bool COMMAND_PROCESSOR::ExecutePacketType3_EVENT_WRITE(
   }
   return true;
 }
+#endif  // COMMAND_PROCESSOR_CUSTOM_EVENT_WRITE
 XE_NOINLINE
 bool COMMAND_PROCESSOR::ExecutePacketType3_EVENT_WRITE_SHD(
     uint32_t packet, uint32_t count) XE_RESTRICT {

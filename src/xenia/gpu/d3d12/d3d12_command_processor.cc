@@ -118,9 +118,6 @@ bool D3D12CommandProcessor::ExecutePacketType3_EVENT_WRITE_ZPD(uint32_t packet,
   auto* sample_counts =
       memory_->TranslatePhysical<xenos::xe_gpu_depth_sample_counts*>(
           sample_count_addr);
-  auto* sample_counts =
-      memory_->TranslatePhysical<xenos::xe_gpu_depth_sample_counts*>(
-          sample_count_addr);
   if (!sample_counts) {
     DisableHostOcclusionQueries();
     return CommandProcessor::ExecutePacketType3_EVENT_WRITE_ZPD(packet, count);
@@ -5315,9 +5312,6 @@ uint64_t D3D12CommandProcessor::NormalizeOcclusionSamples(
 
 void D3D12CommandProcessor::WriteGuestOcclusionResult(
     uint32_t sample_count_address, uint64_t samples) {
-  auto* sample_counts =
-      memory_->TranslatePhysical<xenos::xe_gpu_depth_sample_counts*>(
-          sample_count_address);
   auto* sample_counts =
       memory_->TranslatePhysical<xenos::xe_gpu_depth_sample_counts*>(
           sample_count_address);

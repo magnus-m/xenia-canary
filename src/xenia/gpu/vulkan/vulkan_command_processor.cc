@@ -3107,10 +3107,21 @@ void VulkanCommandProcessor::BeginOcclusionQuery(
       CheckSubmissionFenceAndDeviceLoss(existing->second.resolve_submission);
       ProcessResolvedOcclusionQueries(submission_completed_);
     }
-    if (existing->second.active || existing->second.pending_resolve) {
-      occlusion_query_free_slots_.push_back(existing->second.slot_index);
+
+    existing = occlusion_queries_by_address_.find(sample_count_address);
+    if (existing != occlusion_queries_by_address_.end()) {
+      if (existing->second.pending_resolve) {
+        XELOGE(
+            "BeginOcclusionQuery: Pending resolve for address {:08X} could not "
+            "be completed before reuse (Vulkan).",
+            sample_count_address);
+        return;
+      }
+      if (existing->second.active) {
+        occlusion_query_free_slots_.push_back(existing->second.slot_index);
+      }
+      occlusion_queries_by_address_.erase(existing);
     }
-    occlusion_queries_by_address_.erase(existing);
   }
 
   if (occlusion_query_free_slots_.empty()) {

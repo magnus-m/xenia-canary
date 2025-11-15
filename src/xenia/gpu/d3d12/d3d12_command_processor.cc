@@ -5144,6 +5144,7 @@ bool D3D12CommandProcessor::EnsureOcclusionQueryResources() {
     return false;
   }
 
+  // Map with no read range initially - we'll use explicit ranges when reading
   D3D12_RANGE read_range = {0, 0};
   if (FAILED(occlusion_query_readback_buffer_->Map(
           0, &read_range,
@@ -5228,6 +5229,20 @@ void D3D12CommandProcessor::ProcessResolvedOcclusionQueries(
       continue;
     }
     const ActiveOcclusionQuery& query = it->second;
+    if (!occlusion_query_readback_mapping_) {
+      XELOGE("ProcessResolvedOcclusionQueries: readback mapping is null");
+      WriteOcclusionQueryResult(address, 0);
+      occlusion_query_free_slots_.push_back(query.slot_index);
+      occlusion_queries_by_address_.erase(it);
+      continue;
+    }
+    if (query.slot_index >= kOcclusionQueryCount) {
+      XELOGE("ProcessResolvedOcclusionQueries: slot_index {} out of bounds",
+             query.slot_index);
+      WriteOcclusionQueryResult(address, 0);
+      occlusion_queries_by_address_.erase(it);
+      continue;
+    }
     uint64_t sample_count = occlusion_query_readback_mapping_[query.slot_index];
     WriteOcclusionQueryResult(address, sample_count);
     occlusion_query_free_slots_.push_back(query.slot_index);
@@ -5327,8 +5342,17 @@ void D3D12CommandProcessor::BeginOcclusionQuery(
     return;
   }
 
+  if (occlusion_query_free_slots_.empty()) {
+    XELOGE("BeginOcclusionQuery: No free slots available (should not happen)");
+    return;
+  }
   uint32_t slot_index = occlusion_query_free_slots_.back();
   occlusion_query_free_slots_.pop_back();
+  if (slot_index >= kOcclusionQueryCount) {
+    XELOGE("BeginOcclusionQuery: Invalid slot_index {} from free list",
+           slot_index);
+    return;
+  }
 
   ActiveOcclusionQuery query;
   query.sample_count_address = sample_count_address;

@@ -5285,6 +5285,16 @@ void D3D12CommandProcessor::BeginOcclusionQuery(
       }
       continue;
     }
+    // If the query is still active (BeginQuery was called but not EndQuery),
+    // we must end it properly before reusing the slot
+    if (existing_it->second.active) {
+      if (!BeginSubmission(true)) {
+        return;
+      }
+      deferred_command_list_.D3DEndQuery(occlusion_query_heap_.Get(),
+                                         D3D12_QUERY_TYPE_OCCLUSION,
+                                         existing_it->second.slot_index);
+    }
     occlusion_query_free_slots_.push_back(existing_it->second.slot_index);
     occlusion_queries_by_address_.erase(existing_it);
     break;

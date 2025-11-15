@@ -611,6 +611,8 @@ class DeferredCommandList {
     ID3D12Resource* destination_buffer;
     UINT64 destination_offset;
   };
+  static_assert(alignof(D3DResolveQueryDataArguments) <= alignof(uintmax_t),
+                "Deferred command args must not exceed stream alignment");
 
   void* WriteCommand(Command command, size_t arguments_size_bytes);
 

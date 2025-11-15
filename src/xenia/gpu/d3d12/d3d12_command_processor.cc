@@ -1615,15 +1615,7 @@ bool D3D12CommandProcessor::SetupContext() {
 void D3D12CommandProcessor::ShutdownContext() {
   AwaitAllQueueOperationsCompletion();
 
-  ResetOcclusionQueries(true);
-  if (occlusion_query_readback_buffer_ != nullptr &&
-      occlusion_query_readback_mapping_ != nullptr) {
-    occlusion_query_readback_buffer_->Unmap(0, nullptr);
-    occlusion_query_readback_mapping_ = nullptr;
-  }
-  occlusion_query_readback_buffer_.Reset();
-  occlusion_query_heap_.Reset();
-  occlusion_query_free_slots_.clear();
+  DestroyOcclusionQueryResources(true);
 
   ui::d3d12::util::ReleaseAndNull(readback_buffer_);
   readback_buffer_size_ = 0;
@@ -5132,6 +5124,7 @@ bool D3D12CommandProcessor::EnsureOcclusionQueryResources() {
                                      IID_PPV_ARGS(&occlusion_query_heap_)))) {
     XELOGE("Failed to create a Direct3D 12 occlusion query heap ({} entries)",
            kOcclusionQueryCount);
+    DestroyOcclusionQueryResources();
     occlusion_queries_supported_ = false;
     return false;
   }
@@ -5146,7 +5139,7 @@ bool D3D12CommandProcessor::EnsureOcclusionQueryResources() {
           D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
           IID_PPV_ARGS(&occlusion_query_readback_buffer_)))) {
     XELOGE("Failed to create a Direct3D 12 occlusion query readback buffer");
-    occlusion_query_heap_.Reset();
+    DestroyOcclusionQueryResources();
     occlusion_queries_supported_ = false;
     return false;
   }
@@ -5156,9 +5149,7 @@ bool D3D12CommandProcessor::EnsureOcclusionQueryResources() {
           0, &read_range,
           reinterpret_cast<void**>(&occlusion_query_readback_mapping_)))) {
     XELOGE("Failed to map the Direct3D 12 occlusion query readback buffer");
-    occlusion_query_readback_buffer_.Reset();
-    occlusion_query_heap_.Reset();
-    occlusion_query_readback_mapping_ = nullptr;
+    DestroyOcclusionQueryResources();
     occlusion_queries_supported_ = false;
     return false;
   }
@@ -5171,6 +5162,19 @@ bool D3D12CommandProcessor::EnsureOcclusionQueryResources() {
   }
 
   return true;
+}
+
+void D3D12CommandProcessor::DestroyOcclusionQueryResources(
+    bool blocking_reset) {
+  ResetOcclusionQueries(blocking_reset);
+  if (occlusion_query_readback_buffer_ != nullptr &&
+      occlusion_query_readback_mapping_ != nullptr) {
+    occlusion_query_readback_buffer_->Unmap(0, nullptr);
+    occlusion_query_readback_mapping_ = nullptr;
+  }
+  occlusion_query_readback_buffer_.Reset();
+  occlusion_query_heap_.Reset();
+  occlusion_query_free_slots_.clear();
 }
 
 void D3D12CommandProcessor::ResetOcclusionQueries(bool blocking) {
@@ -5246,7 +5250,6 @@ void D3D12CommandProcessor::WriteOcclusionQueryResult(
 
 void D3D12CommandProcessor::BeginOcclusionQuery(
     uint32_t sample_count_address, xe_gpu_depth_sample_counts* sample_counts) {
-  (void)sample_counts;
   if (!occlusion_queries_supported_) {
     return;
   }
@@ -5262,27 +5265,29 @@ void D3D12CommandProcessor::BeginOcclusionQuery(
 
   ProcessResolvedOcclusionQueries(submission_completed_);
 
-  auto existing = occlusion_queries_by_address_.find(sample_count_address);
-  if (existing != occlusion_queries_by_address_.end()) {
-    if (existing->second.pending_resolve) {
-      CheckSubmissionFence(existing->second.resolve_submission);
-      ProcessResolvedOcclusionQueries(submission_completed_);
+  while (true) {
+    auto existing_it = occlusion_queries_by_address_.find(sample_count_address);
+    if (existing_it == occlusion_queries_by_address_.end()) {
+      break;
     }
-
-    existing = occlusion_queries_by_address_.find(sample_count_address);
-    if (existing != occlusion_queries_by_address_.end()) {
-      if (existing->second.pending_resolve) {
+    if (existing_it->second.pending_resolve) {
+      CheckSubmissionFence(existing_it->second.resolve_submission);
+      ProcessResolvedOcclusionQueries(submission_completed_);
+      auto still_pending_it =
+          occlusion_queries_by_address_.find(sample_count_address);
+      if (still_pending_it != occlusion_queries_by_address_.end() &&
+          still_pending_it->second.pending_resolve) {
         XELOGE(
             "BeginOcclusionQuery: Pending resolve for address {:08X} could not "
             "be completed before reuse.",
             sample_count_address);
         return;
       }
-      if (existing->second.active) {
-        occlusion_query_free_slots_.push_back(existing->second.slot_index);
-      }
-      occlusion_queries_by_address_.erase(existing);
+      continue;
     }
+    occlusion_query_free_slots_.push_back(existing_it->second.slot_index);
+    occlusion_queries_by_address_.erase(existing_it);
+    break;
   }
 
   if (occlusion_query_free_slots_.empty()) {

@@ -334,6 +334,7 @@ class D3D12CommandProcessor final : public CommandProcessor {
 
  private:
   bool EnsureOcclusionQueryResources();
+  void DestroyOcclusionQueryResources(bool blocking_reset = false);
   void ResetOcclusionQueries(bool blocking);
   void ProcessResolvedOcclusionQueries(uint64_t completed_submission);
   void WriteOcclusionQueryResult(uint32_t sample_count_address,

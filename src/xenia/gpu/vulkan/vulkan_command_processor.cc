@@ -1051,18 +1051,7 @@ void VulkanCommandProcessor::ShutdownContext() {
   const ui::vulkan::VulkanDevice::Functions& dfn = vulkan_device->functions();
   const VkDevice device = vulkan_device->device();
 
-  ResetOcclusionQueries(true);
-  if (occlusion_query_readback_mapping_) {
-    dfn.vkUnmapMemory(device, occlusion_query_readback_memory_);
-    occlusion_query_readback_mapping_ = nullptr;
-  }
-  ui::vulkan::util::DestroyAndNullHandle(dfn.vkDestroyBuffer, device,
-                                         occlusion_query_readback_buffer_);
-  ui::vulkan::util::DestroyAndNullHandle(dfn.vkFreeMemory, device,
-                                         occlusion_query_readback_memory_);
-  ui::vulkan::util::DestroyAndNullHandle(dfn.vkDestroyQueryPool, device,
-                                         occlusion_query_pool_);
-  occlusion_query_free_slots_.clear();
+  DestroyOcclusionQueryResources(true);
 
   DestroyScratchBuffer();
 
@@ -2917,6 +2906,7 @@ bool VulkanCommandProcessor::EnsureOcclusionQueryResources() {
                             &occlusion_query_pool_) != VK_SUCCESS) {
     XELOGE("Failed to create a Vulkan occlusion query pool ({} entries)",
            kOcclusionQueryCount);
+    DestroyOcclusionQueryResources();
     occlusion_queries_supported_ = false;
     return false;
   }
@@ -2930,8 +2920,7 @@ bool VulkanCommandProcessor::EnsureOcclusionQueryResources() {
   if (dfn.vkCreateBuffer(device, &buffer_info, nullptr,
                          &occlusion_query_readback_buffer_) != VK_SUCCESS) {
     XELOGE("Failed to create a Vulkan occlusion query readback buffer");
-    dfn.vkDestroyQueryPool(device, occlusion_query_pool_, nullptr);
-    occlusion_query_pool_ = VK_NULL_HANDLE;
+    DestroyOcclusionQueryResources();
     occlusion_queries_supported_ = false;
     return false;
   }
@@ -2946,10 +2935,7 @@ bool VulkanCommandProcessor::EnsureOcclusionQueryResources() {
     XELOGE(
         "Failed to find host visible memory type for occlusion query "
         "readback buffer");
-    dfn.vkDestroyBuffer(device, occlusion_query_readback_buffer_, nullptr);
-    occlusion_query_readback_buffer_ = VK_NULL_HANDLE;
-    dfn.vkDestroyQueryPool(device, occlusion_query_pool_, nullptr);
-    occlusion_query_pool_ = VK_NULL_HANDLE;
+    DestroyOcclusionQueryResources();
     occlusion_queries_supported_ = false;
     return false;
   }
@@ -2961,10 +2947,7 @@ bool VulkanCommandProcessor::EnsureOcclusionQueryResources() {
   if (dfn.vkAllocateMemory(device, &alloc_info, nullptr,
                            &occlusion_query_readback_memory_) != VK_SUCCESS) {
     XELOGE("Failed to allocate memory for occlusion query readback buffer");
-    ui::vulkan::util::DestroyAndNullHandle(dfn.vkDestroyBuffer, device,
-                                           occlusion_query_readback_buffer_);
-    dfn.vkDestroyQueryPool(device, occlusion_query_pool_, nullptr);
-    occlusion_query_pool_ = VK_NULL_HANDLE;
+    DestroyOcclusionQueryResources();
     occlusion_queries_supported_ = false;
     return false;
   }
@@ -2973,12 +2956,7 @@ bool VulkanCommandProcessor::EnsureOcclusionQueryResources() {
                              occlusion_query_readback_memory_,
                              0) != VK_SUCCESS) {
     XELOGE("Failed to bind memory to the occlusion query readback buffer");
-    dfn.vkFreeMemory(device, occlusion_query_readback_memory_, nullptr);
-    occlusion_query_readback_memory_ = VK_NULL_HANDLE;
-    ui::vulkan::util::DestroyAndNullHandle(dfn.vkDestroyBuffer, device,
-                                           occlusion_query_readback_buffer_);
-    dfn.vkDestroyQueryPool(device, occlusion_query_pool_, nullptr);
-    occlusion_query_pool_ = VK_NULL_HANDLE;
+    DestroyOcclusionQueryResources();
     occlusion_queries_supported_ = false;
     return false;
   }
@@ -2988,13 +2966,7 @@ bool VulkanCommandProcessor::EnsureOcclusionQueryResources() {
           reinterpret_cast<void**>(&occlusion_query_readback_mapping_)) !=
       VK_SUCCESS) {
     XELOGE("Failed to map occlusion query readback memory");
-    dfn.vkFreeMemory(device, occlusion_query_readback_memory_, nullptr);
-    occlusion_query_readback_memory_ = VK_NULL_HANDLE;
-    ui::vulkan::util::DestroyAndNullHandle(dfn.vkDestroyBuffer, device,
-                                           occlusion_query_readback_buffer_);
-    occlusion_query_readback_buffer_ = VK_NULL_HANDLE;
-    dfn.vkDestroyQueryPool(device, occlusion_query_pool_, nullptr);
-    occlusion_query_pool_ = VK_NULL_HANDLE;
+    DestroyOcclusionQueryResources();
     occlusion_queries_supported_ = false;
     return false;
   }
@@ -3007,6 +2979,35 @@ bool VulkanCommandProcessor::EnsureOcclusionQueryResources() {
   }
 
   return true;
+}
+
+void VulkanCommandProcessor::DestroyOcclusionQueryResources(
+    bool blocking_reset) {
+  ResetOcclusionQueries(blocking_reset);
+  const ui::vulkan::VulkanDevice* vulkan_device = GetVulkanDevice();
+  VkDevice device = VK_NULL_HANDLE;
+  const ui::vulkan::VulkanDevice::Functions* dfn = nullptr;
+  if (vulkan_device != nullptr) {
+    device = vulkan_device->device();
+    dfn = &vulkan_device->functions();
+  }
+  if (dfn && occlusion_query_readback_mapping_) {
+    dfn->vkUnmapMemory(device, occlusion_query_readback_memory_);
+  }
+  occlusion_query_readback_mapping_ = nullptr;
+  if (dfn && occlusion_query_readback_buffer_ != VK_NULL_HANDLE) {
+    dfn->vkDestroyBuffer(device, occlusion_query_readback_buffer_, nullptr);
+  }
+  occlusion_query_readback_buffer_ = VK_NULL_HANDLE;
+  if (dfn && occlusion_query_readback_memory_ != VK_NULL_HANDLE) {
+    dfn->vkFreeMemory(device, occlusion_query_readback_memory_, nullptr);
+  }
+  occlusion_query_readback_memory_ = VK_NULL_HANDLE;
+  if (dfn && occlusion_query_pool_ != VK_NULL_HANDLE) {
+    dfn->vkDestroyQueryPool(device, occlusion_query_pool_, nullptr);
+  }
+  occlusion_query_pool_ = VK_NULL_HANDLE;
+  occlusion_query_free_slots_.clear();
 }
 
 void VulkanCommandProcessor::ResetOcclusionQueries(bool blocking) {
@@ -3101,27 +3102,29 @@ void VulkanCommandProcessor::BeginOcclusionQuery(
 
   ProcessResolvedOcclusionQueries(submission_completed_);
 
-  auto existing = occlusion_queries_by_address_.find(sample_count_address);
-  if (existing != occlusion_queries_by_address_.end()) {
-    if (existing->second.pending_resolve) {
-      CheckSubmissionFenceAndDeviceLoss(existing->second.resolve_submission);
-      ProcessResolvedOcclusionQueries(submission_completed_);
+  while (true) {
+    auto existing_it = occlusion_queries_by_address_.find(sample_count_address);
+    if (existing_it == occlusion_queries_by_address_.end()) {
+      break;
     }
-
-    existing = occlusion_queries_by_address_.find(sample_count_address);
-    if (existing != occlusion_queries_by_address_.end()) {
-      if (existing->second.pending_resolve) {
+    if (existing_it->second.pending_resolve) {
+      CheckSubmissionFenceAndDeviceLoss(existing_it->second.resolve_submission);
+      ProcessResolvedOcclusionQueries(submission_completed_);
+      auto still_pending_it =
+          occlusion_queries_by_address_.find(sample_count_address);
+      if (still_pending_it != occlusion_queries_by_address_.end() &&
+          still_pending_it->second.pending_resolve) {
         XELOGE(
             "BeginOcclusionQuery: Pending resolve for address {:08X} could not "
             "be completed before reuse (Vulkan).",
             sample_count_address);
         return;
       }
-      if (existing->second.active) {
-        occlusion_query_free_slots_.push_back(existing->second.slot_index);
-      }
-      occlusion_queries_by_address_.erase(existing);
+      continue;
     }
+    occlusion_query_free_slots_.push_back(existing_it->second.slot_index);
+    occlusion_queries_by_address_.erase(existing_it);
+    break;
   }
 
   if (occlusion_query_free_slots_.empty()) {
@@ -3203,10 +3206,12 @@ void VulkanCommandProcessor::EndOcclusionQuery(
                                          it->second.slot_index);
   VkDeviceSize destination_offset =
       VkDeviceSize(it->second.slot_index) * sizeof(uint64_t);
+  // The submission fence tracking guarantees the resolve completes before we
+  // read the data on the CPU, so no WAIT_BIT is required here.
   deferred_command_buffer_.CmdVkCopyQueryPoolResults(
       occlusion_query_pool_, it->second.slot_index, 1,
       occlusion_query_readback_buffer_, destination_offset, sizeof(uint64_t),
-      VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+      VK_QUERY_RESULT_64_BIT);
 
   it->second.active = false;
   it->second.pending_resolve = true;

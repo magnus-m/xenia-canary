@@ -54,8 +54,7 @@ bool NullCommandProcessor::IssueCopy() { return true; }
 void NullCommandProcessor::InitializeTrace() {}
 
 void NullCommandProcessor::BeginOcclusionQuery(
-    uint32_t sample_count_address,
-    xe_gpu_depth_sample_counts* sample_counts) {}
+    uint32_t sample_count_address, xe_gpu_depth_sample_counts* sample_counts) {}
 
 void NullCommandProcessor::EndOcclusionQuery(
     uint32_t sample_count_address, xe_gpu_depth_sample_counts* sample_counts,

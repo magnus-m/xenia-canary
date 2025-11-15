@@ -33,6 +33,8 @@ class ByteStream;
 
 namespace gpu {
 
+using xenos::xe_gpu_depth_sample_counts;
+
 enum class GPUSetting {
   ClearMemoryPageState,
   ReadbackResolve,

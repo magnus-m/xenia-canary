@@ -5224,8 +5224,7 @@ void D3D12CommandProcessor::ProcessResolvedOcclusionQueries(
       continue;
     }
     const ActiveOcclusionQuery& query = it->second;
-    uint64_t sample_count =
-        occlusion_query_readback_mapping_[query.slot_index];
+    uint64_t sample_count = occlusion_query_readback_mapping_[query.slot_index];
     WriteOcclusionQueryResult(address, sample_count);
     occlusion_query_free_slots_.push_back(query.slot_index);
     occlusion_queries_by_address_.erase(it);
@@ -5234,9 +5233,8 @@ void D3D12CommandProcessor::ProcessResolvedOcclusionQueries(
 
 void D3D12CommandProcessor::WriteOcclusionQueryResult(
     uint32_t sample_count_address, uint64_t sample_count) {
-  auto* sample_counts =
-      memory_->TranslatePhysical<xe_gpu_depth_sample_counts*>(
-          sample_count_address);
+  auto* sample_counts = memory_->TranslatePhysical<xe_gpu_depth_sample_counts*>(
+      sample_count_address);
   if (!sample_counts) {
     return;
   }
@@ -5247,16 +5245,16 @@ void D3D12CommandProcessor::WriteOcclusionQueryResult(
 }
 
 void D3D12CommandProcessor::BeginOcclusionQuery(
-    uint32_t sample_count_address,
-    xe_gpu_depth_sample_counts* sample_counts) {
+    uint32_t sample_count_address, xe_gpu_depth_sample_counts* sample_counts) {
   (void)sample_counts;
   if (!occlusion_queries_supported_) {
     return;
   }
   if (!EnsureOcclusionQueryResources()) {
     if (!occlusion_query_warning_emitted_) {
-      XELOGE("Disabling Direct3D 12 occlusion queries due to initialization "
-             "failure");
+      XELOGE(
+          "Disabling Direct3D 12 occlusion queries due to initialization "
+          "failure");
       occlusion_query_warning_emitted_ = true;
     }
     return;
@@ -5288,9 +5286,10 @@ void D3D12CommandProcessor::BeginOcclusionQuery(
 
   if (occlusion_query_free_slots_.empty()) {
     if (!occlusion_query_warning_emitted_) {
-      XELOGE("Out of Direct3D 12 occlusion query slots ({}). Disabling real "
-             "occlusion queries.",
-             kOcclusionQueryCount);
+      XELOGE(
+          "Out of Direct3D 12 occlusion query slots ({}). Disabling real "
+          "occlusion queries.",
+          kOcclusionQueryCount);
       occlusion_query_warning_emitted_ = true;
     }
     occlusion_queries_supported_ = false;
@@ -5313,8 +5312,7 @@ void D3D12CommandProcessor::BeginOcclusionQuery(
   occlusion_queries_by_address_[sample_count_address] = query;
 
   deferred_command_list_.D3DBeginQuery(occlusion_query_heap_.Get(),
-                                       D3D12_QUERY_TYPE_OCCLUSION,
-                                       slot_index);
+                                       D3D12_QUERY_TYPE_OCCLUSION, slot_index);
 }
 
 void D3D12CommandProcessor::EndOcclusionQuery(

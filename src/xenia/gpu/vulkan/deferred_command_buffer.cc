@@ -166,8 +166,8 @@ void DeferredCommandBuffer::Execute(VkCommandBuffer command_buffer) {
 
       case Command::kVkBeginQuery: {
         auto& args = *reinterpret_cast<const ArgsVkBeginQuery*>(stream);
-        dfn.vkCmdBeginQuery(command_buffer, args.query_pool,
-                            args.query_index, args.flags);
+        dfn.vkCmdBeginQuery(command_buffer, args.query_pool, args.query_index,
+                            args.flags);
       } break;
 
       case Command::kVkEndQuery: {
@@ -178,10 +178,9 @@ void DeferredCommandBuffer::Execute(VkCommandBuffer command_buffer) {
       case Command::kVkCopyQueryPoolResults: {
         auto& args =
             *reinterpret_cast<const ArgsVkCopyQueryPoolResults*>(stream);
-        dfn.vkCmdCopyQueryPoolResults(command_buffer, args.query_pool,
-                                      args.first_query, args.query_count,
-                                      args.dst_buffer, args.dst_offset,
-                                      args.stride, args.flags);
+        dfn.vkCmdCopyQueryPoolResults(
+            command_buffer, args.query_pool, args.first_query, args.query_count,
+            args.dst_buffer, args.dst_offset, args.stride, args.flags);
       } break;
 
       case Command::kVkDispatch: {

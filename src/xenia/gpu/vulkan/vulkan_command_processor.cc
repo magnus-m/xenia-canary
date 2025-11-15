@@ -1056,10 +1056,10 @@ void VulkanCommandProcessor::ShutdownContext() {
     dfn.vkUnmapMemory(device, occlusion_query_readback_memory_);
     occlusion_query_readback_mapping_ = nullptr;
   }
-  ui::vulkan::util::DestroyAndNullHandle(
-      dfn.vkDestroyBuffer, device, occlusion_query_readback_buffer_);
-  ui::vulkan::util::DestroyAndNullHandle(
-      dfn.vkFreeMemory, device, occlusion_query_readback_memory_);
+  ui::vulkan::util::DestroyAndNullHandle(dfn.vkDestroyBuffer, device,
+                                         occlusion_query_readback_buffer_);
+  ui::vulkan::util::DestroyAndNullHandle(dfn.vkFreeMemory, device,
+                                         occlusion_query_readback_memory_);
   ui::vulkan::util::DestroyAndNullHandle(dfn.vkDestroyQueryPool, device,
                                          occlusion_query_pool_);
   occlusion_query_free_slots_.clear();
@@ -2923,8 +2923,8 @@ bool VulkanCommandProcessor::EnsureOcclusionQueryResources() {
 
   VkBufferCreateInfo buffer_info = {};
   buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-  buffer_info.size = VkDeviceSize(kOcclusionQueryCount) *
-                     VkDeviceSize(sizeof(uint64_t));
+  buffer_info.size =
+      VkDeviceSize(kOcclusionQueryCount) * VkDeviceSize(sizeof(uint64_t));
   buffer_info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
   buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
   if (dfn.vkCreateBuffer(device, &buffer_info, nullptr,
@@ -2970,8 +2970,8 @@ bool VulkanCommandProcessor::EnsureOcclusionQueryResources() {
   }
 
   if (dfn.vkBindBufferMemory(device, occlusion_query_readback_buffer_,
-                             occlusion_query_readback_memory_, 0) !=
-      VK_SUCCESS) {
+                             occlusion_query_readback_memory_,
+                             0) != VK_SUCCESS) {
     XELOGE("Failed to bind memory to the occlusion query readback buffer");
     dfn.vkFreeMemory(device, occlusion_query_readback_memory_, nullptr);
     occlusion_query_readback_memory_ = VK_NULL_HANDLE;
@@ -2983,10 +2983,10 @@ bool VulkanCommandProcessor::EnsureOcclusionQueryResources() {
     return false;
   }
 
-  if (dfn.vkMapMemory(device, occlusion_query_readback_memory_, 0,
-                      VK_WHOLE_SIZE, 0,
-                      reinterpret_cast<void**>(
-                          &occlusion_query_readback_mapping_)) != VK_SUCCESS) {
+  if (dfn.vkMapMemory(
+          device, occlusion_query_readback_memory_, 0, VK_WHOLE_SIZE, 0,
+          reinterpret_cast<void**>(&occlusion_query_readback_mapping_)) !=
+      VK_SUCCESS) {
     XELOGE("Failed to map occlusion query readback memory");
     dfn.vkFreeMemory(device, occlusion_query_readback_memory_, nullptr);
     occlusion_query_readback_memory_ = VK_NULL_HANDLE;
@@ -3063,8 +3063,7 @@ void VulkanCommandProcessor::ProcessResolvedOcclusionQueries(
       continue;
     }
     const ActiveOcclusionQuery& query = it->second;
-    uint64_t sample_count =
-        occlusion_query_readback_mapping_[query.slot_index];
+    uint64_t sample_count = occlusion_query_readback_mapping_[query.slot_index];
     WriteOcclusionQueryResult(address, sample_count);
     occlusion_query_free_slots_.push_back(query.slot_index);
     occlusion_queries_by_address_.erase(it);
@@ -3073,9 +3072,8 @@ void VulkanCommandProcessor::ProcessResolvedOcclusionQueries(
 
 void VulkanCommandProcessor::WriteOcclusionQueryResult(
     uint32_t sample_count_address, uint64_t sample_count) {
-  auto* sample_counts =
-      memory_->TranslatePhysical<xe_gpu_depth_sample_counts*>(
-          sample_count_address);
+  auto* sample_counts = memory_->TranslatePhysical<xe_gpu_depth_sample_counts*>(
+      sample_count_address);
   if (!sample_counts) {
     return;
   }
@@ -3086,16 +3084,16 @@ void VulkanCommandProcessor::WriteOcclusionQueryResult(
 }
 
 void VulkanCommandProcessor::BeginOcclusionQuery(
-    uint32_t sample_count_address,
-    xe_gpu_depth_sample_counts* sample_counts) {
+    uint32_t sample_count_address, xe_gpu_depth_sample_counts* sample_counts) {
   (void)sample_counts;
   if (!occlusion_queries_supported_) {
     return;
   }
   if (!EnsureOcclusionQueryResources()) {
     if (!occlusion_query_warning_emitted_) {
-      XELOGE("Disabling Vulkan occlusion queries due to initialization "
-             "failure");
+      XELOGE(
+          "Disabling Vulkan occlusion queries due to initialization "
+          "failure");
       occlusion_query_warning_emitted_ = true;
     }
     return;
@@ -3128,9 +3126,10 @@ void VulkanCommandProcessor::BeginOcclusionQuery(
 
   if (occlusion_query_free_slots_.empty()) {
     if (!occlusion_query_warning_emitted_) {
-      XELOGE("Out of Vulkan occlusion query slots ({}). Disabling real "
-             "occlusion queries.",
-             kOcclusionQueryCount);
+      XELOGE(
+          "Out of Vulkan occlusion query slots ({}). Disabling real "
+          "occlusion queries.",
+          kOcclusionQueryCount);
       occlusion_query_warning_emitted_ = true;
     }
     occlusion_queries_supported_ = false;
@@ -3195,8 +3194,7 @@ void VulkanCommandProcessor::EndOcclusionQuery(
       VkDeviceSize(it->second.slot_index) * sizeof(uint64_t);
   deferred_command_buffer_.CmdVkCopyQueryPoolResults(
       occlusion_query_pool_, it->second.slot_index, 1,
-      occlusion_query_readback_buffer_, destination_offset,
-      sizeof(uint64_t),
+      occlusion_query_readback_buffer_, destination_offset, sizeof(uint64_t),
       VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
 
   it->second.active = false;

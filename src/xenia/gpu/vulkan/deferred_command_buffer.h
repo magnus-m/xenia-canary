@@ -209,8 +209,8 @@ class DeferredCommandBuffer {
 
   void CmdVkBeginQuery(VkQueryPool query_pool, uint32_t query_index,
                        VkQueryControlFlags flags) {
-    auto& args = *reinterpret_cast<ArgsVkBeginQuery*>(WriteCommand(
-        Command::kVkBeginQuery, sizeof(ArgsVkBeginQuery)));
+    auto& args = *reinterpret_cast<ArgsVkBeginQuery*>(
+        WriteCommand(Command::kVkBeginQuery, sizeof(ArgsVkBeginQuery)));
     args.query_pool = query_pool;
     args.query_index = query_index;
     args.flags = flags;
@@ -228,8 +228,7 @@ class DeferredCommandBuffer {
                                  VkDeviceSize dst_offset, VkDeviceSize stride,
                                  VkQueryResultFlags flags) {
     auto& args = *reinterpret_cast<ArgsVkCopyQueryPoolResults*>(WriteCommand(
-        Command::kVkCopyQueryPoolResults,
-        sizeof(ArgsVkCopyQueryPoolResults)));
+        Command::kVkCopyQueryPoolResults, sizeof(ArgsVkCopyQueryPoolResults)));
     args.query_pool = query_pool;
     args.first_query = first_query;
     args.query_count = query_count;

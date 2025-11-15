@@ -967,9 +967,8 @@ bool COMMAND_PROCESSOR::ExecutePacketType3_EVENT_WRITE_ZPD(
   if (!sample_count_address) {
     return true;
   }
-  auto* sample_counts =
-      memory_->TranslatePhysical<xe_gpu_depth_sample_counts*>(
-          sample_count_address);
+  auto* sample_counts = memory_->TranslatePhysical<xe_gpu_depth_sample_counts*>(
+      sample_count_address);
   if (!sample_counts) {
     return true;
   }

@@ -954,44 +954,38 @@ bool COMMAND_PROCESSOR::ExecutePacketType3_EVENT_WRITE_EXT(
   return true;
 }
 
-static uint32_t samples = cvars::query_occlusion_sample_upper_threshold;
-
 XE_NOINLINE
 bool COMMAND_PROCESSOR::ExecutePacketType3_EVENT_WRITE_ZPD(
     uint32_t packet, uint32_t count) XE_RESTRICT {
-  // Set by D3D as BE but struct ABI is LE
   const uint32_t kQueryFinished = xe::byte_swap(0xFFFFFEED);
   assert_true(count == 1);
   uint32_t initiator = reader_.ReadAndSwap<uint32_t>();
-  // Writeback initiator.
   COMMAND_PROCESSOR::WriteEventInitiator(initiator & 0x3F);
 
-  if (cvars::query_occlusion_sample_lower_threshold < 0) {
+  uint32_t sample_count_address =
+      register_file_->values[XE_GPU_REG_RB_SAMPLE_COUNT_ADDR];
+  if (!sample_count_address) {
     return true;
   }
-  // Occlusion queries:
-  // This command is send on query begin and end.
-  // As a workaround report some fixed amount of passed samples.
-  auto* pSampleCounts = memory_->TranslatePhysical<xe_gpu_depth_sample_counts*>(
-      register_file_->values[XE_GPU_REG_RB_SAMPLE_COUNT_ADDR]);
-  // 0xFFFFFEED is written to this two locations by D3D only on D3DISSUE_END
-  // and used to detect a finished query.
-  bool is_end_via_z_pass = pSampleCounts->ZPass_A == kQueryFinished &&
-                           pSampleCounts->ZPass_B == kQueryFinished;
-  // Older versions of D3D also checks for ZFail (4D5307D5).
-  bool is_end_via_z_fail = pSampleCounts->ZFail_A == kQueryFinished &&
-                           pSampleCounts->ZFail_B == kQueryFinished;
-  std::memset(pSampleCounts, 0, sizeof(xe_gpu_depth_sample_counts));
-  if (is_end_via_z_pass || is_end_via_z_fail) {
-    pSampleCounts->ZPass_A = samples;
-    pSampleCounts->Total_A = samples;
+  auto* sample_counts =
+      memory_->TranslatePhysical<xe_gpu_depth_sample_counts*>(
+          sample_count_address);
+  if (!sample_counts) {
+    return true;
   }
 
-  samples =
-      samples <= static_cast<uint32_t>(
-                     cvars::query_occlusion_sample_lower_threshold)
-          ? static_cast<uint32_t>(cvars::query_occlusion_sample_upper_threshold)
-          : samples - 1;
+  bool is_end_via_z_pass = sample_counts->ZPass_A == kQueryFinished &&
+                           sample_counts->ZPass_B == kQueryFinished;
+  bool is_end_via_z_fail = sample_counts->ZFail_A == kQueryFinished &&
+                           sample_counts->ZFail_B == kQueryFinished;
+  std::memset(sample_counts, 0, sizeof(xe_gpu_depth_sample_counts));
+
+  if (is_end_via_z_pass || is_end_via_z_fail) {
+    EndOcclusionQuery(sample_count_address, sample_counts, is_end_via_z_pass,
+                      is_end_via_z_fail);
+  } else {
+    BeginOcclusionQuery(sample_count_address, sample_counts);
+  }
 
   return true;
 }

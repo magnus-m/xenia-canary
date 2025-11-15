@@ -9,8 +9,10 @@
 
 #include "xenia/gpu/vulkan/vulkan_command_processor.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <vector>
 
 #include "xenia/base/assert.h"
 #include "xenia/base/byte_order.h"
@@ -95,6 +97,7 @@ VulkanCommandProcessor::~VulkanCommandProcessor() = default;
 void VulkanCommandProcessor::ClearCaches() {
   CommandProcessor::ClearCaches();
   cache_clear_requested_ = true;
+  ResetOcclusionQueries(true);
 }
 
 void VulkanCommandProcessor::TracePlaybackWroteMemory(uint32_t base_ptr,
@@ -1047,6 +1050,19 @@ void VulkanCommandProcessor::ShutdownContext() {
   const ui::vulkan::VulkanDevice* const vulkan_device = GetVulkanDevice();
   const ui::vulkan::VulkanDevice::Functions& dfn = vulkan_device->functions();
   const VkDevice device = vulkan_device->device();
+
+  ResetOcclusionQueries(true);
+  if (occlusion_query_readback_mapping_) {
+    dfn.vkUnmapMemory(device, occlusion_query_readback_memory_);
+    occlusion_query_readback_mapping_ = nullptr;
+  }
+  ui::vulkan::util::DestroyAndNullHandle(
+      dfn.vkDestroyBuffer, device, occlusion_query_readback_buffer_);
+  ui::vulkan::util::DestroyAndNullHandle(
+      dfn.vkFreeMemory, device, occlusion_query_readback_memory_);
+  ui::vulkan::util::DestroyAndNullHandle(dfn.vkDestroyQueryPool, device,
+                                         occlusion_query_pool_);
+  occlusion_query_free_slots_.clear();
 
   DestroyScratchBuffer();
 
@@ -2881,6 +2897,313 @@ VkBuffer VulkanCommandProcessor::RequestReadbackBuffer(uint32_t size) {
   return readback_buffer_;
 }
 
+bool VulkanCommandProcessor::EnsureOcclusionQueryResources() {
+  if (!occlusion_queries_supported_) {
+    return false;
+  }
+  if (occlusion_query_pool_ != VK_NULL_HANDLE) {
+    return true;
+  }
+
+  const ui::vulkan::VulkanDevice* const vulkan_device = GetVulkanDevice();
+  const ui::vulkan::VulkanDevice::Functions& dfn = vulkan_device->functions();
+  VkDevice device = vulkan_device->device();
+
+  VkQueryPoolCreateInfo pool_info = {};
+  pool_info.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+  pool_info.queryType = VK_QUERY_TYPE_OCCLUSION;
+  pool_info.queryCount = kOcclusionQueryCount;
+  if (dfn.vkCreateQueryPool(device, &pool_info, nullptr,
+                            &occlusion_query_pool_) != VK_SUCCESS) {
+    XELOGE("Failed to create a Vulkan occlusion query pool ({} entries)",
+           kOcclusionQueryCount);
+    occlusion_queries_supported_ = false;
+    return false;
+  }
+
+  VkBufferCreateInfo buffer_info = {};
+  buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+  buffer_info.size = VkDeviceSize(kOcclusionQueryCount) *
+                     VkDeviceSize(sizeof(uint64_t));
+  buffer_info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+  buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+  if (dfn.vkCreateBuffer(device, &buffer_info, nullptr,
+                         &occlusion_query_readback_buffer_) != VK_SUCCESS) {
+    XELOGE("Failed to create a Vulkan occlusion query readback buffer");
+    dfn.vkDestroyQueryPool(device, occlusion_query_pool_, nullptr);
+    occlusion_query_pool_ = VK_NULL_HANDLE;
+    occlusion_queries_supported_ = false;
+    return false;
+  }
+
+  VkMemoryRequirements memory_requirements;
+  dfn.vkGetBufferMemoryRequirements(device, occlusion_query_readback_buffer_,
+                                    &memory_requirements);
+  uint32_t memory_type_index = ui::vulkan::util::ChooseMemoryType(
+      vulkan_device->memory_types(), memory_requirements.memoryTypeBits,
+      ui::vulkan::util::MemoryPurpose::kReadback);
+  if (memory_type_index == UINT32_MAX) {
+    XELOGE(
+        "Failed to find host visible memory type for occlusion query "
+        "readback buffer");
+    dfn.vkDestroyBuffer(device, occlusion_query_readback_buffer_, nullptr);
+    occlusion_query_readback_buffer_ = VK_NULL_HANDLE;
+    dfn.vkDestroyQueryPool(device, occlusion_query_pool_, nullptr);
+    occlusion_query_pool_ = VK_NULL_HANDLE;
+    occlusion_queries_supported_ = false;
+    return false;
+  }
+
+  VkMemoryAllocateInfo alloc_info = {};
+  alloc_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+  alloc_info.allocationSize = memory_requirements.size;
+  alloc_info.memoryTypeIndex = memory_type_index;
+  if (dfn.vkAllocateMemory(device, &alloc_info, nullptr,
+                           &occlusion_query_readback_memory_) != VK_SUCCESS) {
+    XELOGE("Failed to allocate memory for occlusion query readback buffer");
+    ui::vulkan::util::DestroyAndNullHandle(dfn.vkDestroyBuffer, device,
+                                           occlusion_query_readback_buffer_);
+    dfn.vkDestroyQueryPool(device, occlusion_query_pool_, nullptr);
+    occlusion_query_pool_ = VK_NULL_HANDLE;
+    occlusion_queries_supported_ = false;
+    return false;
+  }
+
+  if (dfn.vkBindBufferMemory(device, occlusion_query_readback_buffer_,
+                             occlusion_query_readback_memory_, 0) !=
+      VK_SUCCESS) {
+    XELOGE("Failed to bind memory to the occlusion query readback buffer");
+    dfn.vkFreeMemory(device, occlusion_query_readback_memory_, nullptr);
+    occlusion_query_readback_memory_ = VK_NULL_HANDLE;
+    ui::vulkan::util::DestroyAndNullHandle(dfn.vkDestroyBuffer, device,
+                                           occlusion_query_readback_buffer_);
+    dfn.vkDestroyQueryPool(device, occlusion_query_pool_, nullptr);
+    occlusion_query_pool_ = VK_NULL_HANDLE;
+    occlusion_queries_supported_ = false;
+    return false;
+  }
+
+  if (dfn.vkMapMemory(device, occlusion_query_readback_memory_, 0,
+                      VK_WHOLE_SIZE, 0,
+                      reinterpret_cast<void**>(
+                          &occlusion_query_readback_mapping_)) != VK_SUCCESS) {
+    XELOGE("Failed to map occlusion query readback memory");
+    dfn.vkFreeMemory(device, occlusion_query_readback_memory_, nullptr);
+    occlusion_query_readback_memory_ = VK_NULL_HANDLE;
+    ui::vulkan::util::DestroyAndNullHandle(dfn.vkDestroyBuffer, device,
+                                           occlusion_query_readback_buffer_);
+    occlusion_query_readback_buffer_ = VK_NULL_HANDLE;
+    dfn.vkDestroyQueryPool(device, occlusion_query_pool_, nullptr);
+    occlusion_query_pool_ = VK_NULL_HANDLE;
+    occlusion_queries_supported_ = false;
+    return false;
+  }
+
+  occlusion_queries_by_address_.clear();
+  occlusion_query_free_slots_.clear();
+  occlusion_query_free_slots_.reserve(kOcclusionQueryCount);
+  for (uint32_t i = 0; i < kOcclusionQueryCount; ++i) {
+    occlusion_query_free_slots_.push_back(kOcclusionQueryCount - 1 - i);
+  }
+
+  return true;
+}
+
+void VulkanCommandProcessor::ResetOcclusionQueries(bool blocking) {
+  if (occlusion_query_pool_ == VK_NULL_HANDLE) {
+    occlusion_queries_by_address_.clear();
+    occlusion_query_free_slots_.clear();
+    return;
+  }
+  if (blocking && !occlusion_queries_by_address_.empty()) {
+    uint64_t current_submission = GetCurrentSubmission();
+    if (current_submission) {
+      CheckSubmissionFenceAndDeviceLoss(current_submission - 1);
+    }
+    ProcessResolvedOcclusionQueries(submission_completed_);
+  }
+  if (!occlusion_queries_by_address_.empty()) {
+    if (!blocking) {
+      for (const auto& entry : occlusion_queries_by_address_) {
+        if (entry.second.pending_resolve) {
+          WriteOcclusionQueryResult(entry.first, 0);
+        }
+      }
+    }
+    occlusion_queries_by_address_.clear();
+  }
+  occlusion_query_free_slots_.clear();
+  occlusion_query_free_slots_.reserve(kOcclusionQueryCount);
+  for (uint32_t i = 0; i < kOcclusionQueryCount; ++i) {
+    occlusion_query_free_slots_.push_back(kOcclusionQueryCount - 1 - i);
+  }
+}
+
+void VulkanCommandProcessor::ProcessResolvedOcclusionQueries(
+    uint64_t completed_submission) {
+  if (occlusion_query_pool_ == VK_NULL_HANDLE ||
+      !occlusion_query_readback_mapping_ ||
+      occlusion_queries_by_address_.empty()) {
+    return;
+  }
+  std::vector<uint32_t> ready_addresses;
+  ready_addresses.reserve(occlusion_queries_by_address_.size());
+  for (const auto& entry : occlusion_queries_by_address_) {
+    if (entry.second.pending_resolve &&
+        entry.second.resolve_submission <= completed_submission) {
+      ready_addresses.push_back(entry.first);
+    }
+  }
+  if (ready_addresses.empty()) {
+    return;
+  }
+  for (uint32_t address : ready_addresses) {
+    auto it = occlusion_queries_by_address_.find(address);
+    if (it == occlusion_queries_by_address_.end()) {
+      continue;
+    }
+    const ActiveOcclusionQuery& query = it->second;
+    uint64_t sample_count =
+        occlusion_query_readback_mapping_[query.slot_index];
+    WriteOcclusionQueryResult(address, sample_count);
+    occlusion_query_free_slots_.push_back(query.slot_index);
+    occlusion_queries_by_address_.erase(it);
+  }
+}
+
+void VulkanCommandProcessor::WriteOcclusionQueryResult(
+    uint32_t sample_count_address, uint64_t sample_count) {
+  auto* sample_counts =
+      memory_->TranslatePhysical<xe_gpu_depth_sample_counts*>(
+          sample_count_address);
+  if (!sample_counts) {
+    return;
+  }
+  uint32_t clamped_value =
+      static_cast<uint32_t>(std::min(sample_count, uint64_t(UINT32_MAX)));
+  sample_counts->ZPass_A = clamped_value;
+  sample_counts->Total_A = clamped_value;
+}
+
+void VulkanCommandProcessor::BeginOcclusionQuery(
+    uint32_t sample_count_address,
+    xe_gpu_depth_sample_counts* sample_counts) {
+  (void)sample_counts;
+  if (!occlusion_queries_supported_) {
+    return;
+  }
+  if (!EnsureOcclusionQueryResources()) {
+    if (!occlusion_query_warning_emitted_) {
+      XELOGE("Disabling Vulkan occlusion queries due to initialization "
+             "failure");
+      occlusion_query_warning_emitted_ = true;
+    }
+    return;
+  }
+
+  ProcessResolvedOcclusionQueries(submission_completed_);
+
+  auto existing = occlusion_queries_by_address_.find(sample_count_address);
+  if (existing != occlusion_queries_by_address_.end()) {
+    if (existing->second.pending_resolve) {
+      CheckSubmissionFenceAndDeviceLoss(existing->second.resolve_submission);
+      ProcessResolvedOcclusionQueries(submission_completed_);
+    }
+    if (existing->second.active || existing->second.pending_resolve) {
+      occlusion_query_free_slots_.push_back(existing->second.slot_index);
+    }
+    occlusion_queries_by_address_.erase(existing);
+  }
+
+  if (occlusion_query_free_slots_.empty()) {
+    ProcessResolvedOcclusionQueries(submission_completed_);
+    if (occlusion_query_free_slots_.empty()) {
+      uint64_t current_submission = GetCurrentSubmission();
+      if (current_submission) {
+        CheckSubmissionFenceAndDeviceLoss(current_submission - 1);
+        ProcessResolvedOcclusionQueries(submission_completed_);
+      }
+    }
+  }
+
+  if (occlusion_query_free_slots_.empty()) {
+    if (!occlusion_query_warning_emitted_) {
+      XELOGE("Out of Vulkan occlusion query slots ({}). Disabling real "
+             "occlusion queries.",
+             kOcclusionQueryCount);
+      occlusion_query_warning_emitted_ = true;
+    }
+    occlusion_queries_supported_ = false;
+    ResetOcclusionQueries(false);
+    return;
+  }
+
+  if (!BeginSubmission(true)) {
+    return;
+  }
+
+  uint32_t slot_index = occlusion_query_free_slots_.back();
+  occlusion_query_free_slots_.pop_back();
+
+  ActiveOcclusionQuery query;
+  query.sample_count_address = sample_count_address;
+  query.slot_index = slot_index;
+  query.active = true;
+  query.pending_resolve = false;
+  occlusion_queries_by_address_[sample_count_address] = query;
+
+  deferred_command_buffer_.CmdVkBeginQuery(occlusion_query_pool_, slot_index,
+                                           0);
+}
+
+void VulkanCommandProcessor::EndOcclusionQuery(
+    uint32_t sample_count_address, xe_gpu_depth_sample_counts* sample_counts,
+    bool via_z_pass, bool via_z_fail) {
+  (void)via_z_pass;
+  (void)via_z_fail;
+  if (!occlusion_queries_supported_ ||
+      occlusion_query_pool_ == VK_NULL_HANDLE) {
+    if (sample_counts) {
+      sample_counts->ZPass_A = 0;
+      sample_counts->Total_A = 0;
+    }
+    return;
+  }
+
+  auto it = occlusion_queries_by_address_.find(sample_count_address);
+  if (it == occlusion_queries_by_address_.end() || !it->second.active) {
+    if (sample_counts) {
+      sample_counts->ZPass_A = 0;
+      sample_counts->Total_A = 0;
+    }
+    return;
+  }
+
+  if (!BeginSubmission(true)) {
+    occlusion_query_free_slots_.push_back(it->second.slot_index);
+    occlusion_queries_by_address_.erase(it);
+    if (sample_counts) {
+      sample_counts->ZPass_A = 0;
+      sample_counts->Total_A = 0;
+    }
+    return;
+  }
+
+  deferred_command_buffer_.CmdVkEndQuery(occlusion_query_pool_,
+                                         it->second.slot_index);
+  VkDeviceSize destination_offset =
+      VkDeviceSize(it->second.slot_index) * sizeof(uint64_t);
+  deferred_command_buffer_.CmdVkCopyQueryPoolResults(
+      occlusion_query_pool_, it->second.slot_index, 1,
+      occlusion_query_readback_buffer_, destination_offset,
+      sizeof(uint64_t),
+      VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+
+  it->second.active = false;
+  it->second.pending_resolve = true;
+  it->second.resolve_submission = GetCurrentSubmission();
+}
+
 void VulkanCommandProcessor::InitializeTrace() {
   CommandProcessor::InitializeTrace();
 
@@ -3001,6 +3324,8 @@ void VulkanCommandProcessor::CheckSubmissionFenceAndDeviceLoss(
   render_target_cache_->CompletedSubmissionUpdated();
 
   texture_cache_->CompletedSubmissionUpdated(submission_completed_);
+
+  ProcessResolvedOcclusionQueries(submission_completed_);
 
   // Destroy objects scheduled for destruction.
   while (!destroy_framebuffers_.empty()) {

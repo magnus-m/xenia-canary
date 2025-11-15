@@ -326,7 +326,20 @@ class D3D12CommandProcessor final : public CommandProcessor {
   bool IssueCopy_ReadbackResolvePath();
   void InitializeTrace() override;
 
+  void BeginOcclusionQuery(
+      uint32_t sample_count_address,
+      xe_gpu_depth_sample_counts* sample_counts) override;
+  void EndOcclusionQuery(uint32_t sample_count_address,
+                         xe_gpu_depth_sample_counts* sample_counts,
+                         bool via_z_pass, bool via_z_fail) override;
+
  private:
+  bool EnsureOcclusionQueryResources();
+  void ResetOcclusionQueries(bool blocking);
+  void ProcessResolvedOcclusionQueries(uint64_t completed_submission);
+  void WriteOcclusionQueryResult(uint32_t sample_count_address,
+                                 uint64_t sample_count);
+
   static constexpr uint32_t kQueueFrames = 3;
 
   enum RootParameter : UINT {
@@ -694,6 +707,23 @@ class D3D12CommandProcessor final : public CommandProcessor {
 
   ID3D12Resource* readback_buffer_ = nullptr;
   uint32_t readback_buffer_size_ = 0;
+
+  struct ActiveOcclusionQuery {
+    uint32_t sample_count_address = 0;
+    uint32_t slot_index = 0;
+    uint64_t resolve_submission = 0;
+    bool active = false;
+    bool pending_resolve = false;
+  };
+  static constexpr uint32_t kOcclusionQueryCount = 16384;
+  Microsoft::WRL::ComPtr<ID3D12QueryHeap> occlusion_query_heap_;
+  Microsoft::WRL::ComPtr<ID3D12Resource> occlusion_query_readback_buffer_;
+  uint64_t* occlusion_query_readback_mapping_ = nullptr;
+  std::unordered_map<uint32_t, ActiveOcclusionQuery>
+      occlusion_queries_by_address_;
+  std::vector<uint32_t> occlusion_query_free_slots_;
+  bool occlusion_queries_supported_ = true;
+  bool occlusion_query_warning_emitted_ = false;
 
   // The current fixed-function drawing state.
   D3D12_VIEWPORT ff_viewport_;

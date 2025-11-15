@@ -9,6 +9,7 @@
 
 #include "xenia/gpu/d3d12/d3d12_command_processor.h"
 #include <cstring>
+#include <vector>
 #include "xenia/base/assert.h"
 #include "xenia/base/byte_order.h"
 #include "xenia/base/cvar.h"
@@ -60,6 +61,7 @@ D3D12CommandProcessor::~D3D12CommandProcessor() = default;
 void D3D12CommandProcessor::ClearCaches() {
   CommandProcessor::ClearCaches();
   cache_clear_requested_ = true;
+  ResetOcclusionQueries(true);
 }
 
 void D3D12CommandProcessor::InitializeShaderStorage(
@@ -1612,6 +1614,16 @@ bool D3D12CommandProcessor::SetupContext() {
 
 void D3D12CommandProcessor::ShutdownContext() {
   AwaitAllQueueOperationsCompletion();
+
+  ResetOcclusionQueries(true);
+  if (occlusion_query_readback_buffer_ != nullptr &&
+      occlusion_query_readback_mapping_ != nullptr) {
+    occlusion_query_readback_buffer_->Unmap(0, nullptr);
+    occlusion_query_readback_mapping_ = nullptr;
+  }
+  occlusion_query_readback_buffer_.Reset();
+  occlusion_query_heap_.Reset();
+  occlusion_query_free_slots_.clear();
 
   ui::d3d12::util::ReleaseAndNull(readback_buffer_);
   readback_buffer_size_ = 0;
@@ -3210,6 +3222,8 @@ void D3D12CommandProcessor::CheckSubmissionFence(uint64_t await_submission) {
   primitive_processor_->CompletedSubmissionUpdated();
 
   texture_cache_->CompletedSubmissionUpdated(submission_completed_);
+
+  ProcessResolvedOcclusionQueries(submission_completed_);
 }
 
 bool D3D12CommandProcessor::BeginSubmission(bool is_guest_command) {
@@ -5099,6 +5113,255 @@ ID3D12Resource* D3D12CommandProcessor::RequestReadbackBuffer(uint32_t size) {
     readback_buffer_size_ = size;
   }
   return readback_buffer_;
+}
+
+bool D3D12CommandProcessor::EnsureOcclusionQueryResources() {
+  if (!occlusion_queries_supported_) {
+    return false;
+  }
+  if (occlusion_query_heap_) {
+    return true;
+  }
+  const ui::d3d12::D3D12Provider& provider = GetD3D12Provider();
+  ID3D12Device* device = provider.GetDevice();
+
+  D3D12_QUERY_HEAP_DESC heap_desc = {};
+  heap_desc.Type = D3D12_QUERY_HEAP_TYPE_OCCLUSION;
+  heap_desc.Count = kOcclusionQueryCount;
+  if (FAILED(device->CreateQueryHeap(&heap_desc,
+                                     IID_PPV_ARGS(&occlusion_query_heap_)))) {
+    XELOGE("Failed to create a Direct3D 12 occlusion query heap ({} entries)",
+           kOcclusionQueryCount);
+    occlusion_queries_supported_ = false;
+    return false;
+  }
+
+  D3D12_RESOURCE_DESC buffer_desc;
+  ui::d3d12::util::FillBufferResourceDesc(
+      buffer_desc, kOcclusionQueryCount * uint32_t(sizeof(uint64_t)),
+      D3D12_RESOURCE_FLAG_NONE);
+  if (FAILED(device->CreateCommittedResource(
+          &ui::d3d12::util::kHeapPropertiesReadback,
+          provider.GetHeapFlagCreateNotZeroed(), &buffer_desc,
+          D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+          IID_PPV_ARGS(&occlusion_query_readback_buffer_)))) {
+    XELOGE("Failed to create a Direct3D 12 occlusion query readback buffer");
+    occlusion_query_heap_.Reset();
+    occlusion_queries_supported_ = false;
+    return false;
+  }
+
+  D3D12_RANGE read_range = {0, 0};
+  if (FAILED(occlusion_query_readback_buffer_->Map(
+          0, &read_range,
+          reinterpret_cast<void**>(&occlusion_query_readback_mapping_)))) {
+    XELOGE("Failed to map the Direct3D 12 occlusion query readback buffer");
+    occlusion_query_readback_buffer_.Reset();
+    occlusion_query_heap_.Reset();
+    occlusion_query_readback_mapping_ = nullptr;
+    occlusion_queries_supported_ = false;
+    return false;
+  }
+
+  occlusion_queries_by_address_.clear();
+  occlusion_query_free_slots_.clear();
+  occlusion_query_free_slots_.reserve(kOcclusionQueryCount);
+  for (uint32_t i = 0; i < kOcclusionQueryCount; ++i) {
+    occlusion_query_free_slots_.push_back(kOcclusionQueryCount - 1 - i);
+  }
+
+  return true;
+}
+
+void D3D12CommandProcessor::ResetOcclusionQueries(bool blocking) {
+  if (!occlusion_query_heap_) {
+    occlusion_queries_by_address_.clear();
+    occlusion_query_free_slots_.clear();
+    return;
+  }
+  if (blocking && !occlusion_queries_by_address_.empty()) {
+    if (submission_current_ > 0) {
+      CheckSubmissionFence(submission_current_ - 1);
+    }
+    ProcessResolvedOcclusionQueries(submission_completed_);
+  }
+  if (!occlusion_queries_by_address_.empty()) {
+    if (!blocking) {
+      for (const auto& entry : occlusion_queries_by_address_) {
+        if (entry.second.pending_resolve) {
+          WriteOcclusionQueryResult(entry.first, 0);
+        }
+      }
+    }
+    occlusion_queries_by_address_.clear();
+  }
+  occlusion_query_free_slots_.clear();
+  occlusion_query_free_slots_.reserve(kOcclusionQueryCount);
+  for (uint32_t i = 0; i < kOcclusionQueryCount; ++i) {
+    occlusion_query_free_slots_.push_back(kOcclusionQueryCount - 1 - i);
+  }
+}
+
+void D3D12CommandProcessor::ProcessResolvedOcclusionQueries(
+    uint64_t completed_submission) {
+  if (!occlusion_query_heap_ || occlusion_queries_by_address_.empty()) {
+    return;
+  }
+  std::vector<uint32_t> ready_addresses;
+  ready_addresses.reserve(occlusion_queries_by_address_.size());
+  for (const auto& entry : occlusion_queries_by_address_) {
+    if (entry.second.pending_resolve &&
+        entry.second.resolve_submission <= completed_submission) {
+      ready_addresses.push_back(entry.first);
+    }
+  }
+  if (ready_addresses.empty()) {
+    return;
+  }
+  for (uint32_t address : ready_addresses) {
+    auto it = occlusion_queries_by_address_.find(address);
+    if (it == occlusion_queries_by_address_.end()) {
+      continue;
+    }
+    const ActiveOcclusionQuery& query = it->second;
+    uint64_t sample_count =
+        occlusion_query_readback_mapping_[query.slot_index];
+    WriteOcclusionQueryResult(address, sample_count);
+    occlusion_query_free_slots_.push_back(query.slot_index);
+    occlusion_queries_by_address_.erase(it);
+  }
+}
+
+void D3D12CommandProcessor::WriteOcclusionQueryResult(
+    uint32_t sample_count_address, uint64_t sample_count) {
+  auto* sample_counts =
+      memory_->TranslatePhysical<xe_gpu_depth_sample_counts*>(
+          sample_count_address);
+  if (!sample_counts) {
+    return;
+  }
+  uint32_t clamped_value =
+      static_cast<uint32_t>(std::min(sample_count, uint64_t(UINT32_MAX)));
+  sample_counts->ZPass_A = clamped_value;
+  sample_counts->Total_A = clamped_value;
+}
+
+void D3D12CommandProcessor::BeginOcclusionQuery(
+    uint32_t sample_count_address,
+    xe_gpu_depth_sample_counts* sample_counts) {
+  (void)sample_counts;
+  if (!occlusion_queries_supported_) {
+    return;
+  }
+  if (!EnsureOcclusionQueryResources()) {
+    if (!occlusion_query_warning_emitted_) {
+      XELOGE("Disabling Direct3D 12 occlusion queries due to initialization "
+             "failure");
+      occlusion_query_warning_emitted_ = true;
+    }
+    return;
+  }
+
+  ProcessResolvedOcclusionQueries(submission_completed_);
+
+  auto existing = occlusion_queries_by_address_.find(sample_count_address);
+  if (existing != occlusion_queries_by_address_.end()) {
+    if (existing->second.pending_resolve) {
+      CheckSubmissionFence(existing->second.resolve_submission);
+      ProcessResolvedOcclusionQueries(submission_completed_);
+    }
+    if (existing->second.active || existing->second.pending_resolve) {
+      occlusion_query_free_slots_.push_back(existing->second.slot_index);
+    }
+    occlusion_queries_by_address_.erase(existing);
+  }
+
+  if (occlusion_query_free_slots_.empty()) {
+    ProcessResolvedOcclusionQueries(submission_completed_);
+    if (occlusion_query_free_slots_.empty()) {
+      if (submission_current_ > 0) {
+        CheckSubmissionFence(submission_current_ - 1);
+        ProcessResolvedOcclusionQueries(submission_completed_);
+      }
+    }
+  }
+
+  if (occlusion_query_free_slots_.empty()) {
+    if (!occlusion_query_warning_emitted_) {
+      XELOGE("Out of Direct3D 12 occlusion query slots ({}). Disabling real "
+             "occlusion queries.",
+             kOcclusionQueryCount);
+      occlusion_query_warning_emitted_ = true;
+    }
+    occlusion_queries_supported_ = false;
+    ResetOcclusionQueries(false);
+    return;
+  }
+
+  if (!BeginSubmission(true)) {
+    return;
+  }
+
+  uint32_t slot_index = occlusion_query_free_slots_.back();
+  occlusion_query_free_slots_.pop_back();
+
+  ActiveOcclusionQuery query;
+  query.sample_count_address = sample_count_address;
+  query.slot_index = slot_index;
+  query.active = true;
+  query.pending_resolve = false;
+  occlusion_queries_by_address_[sample_count_address] = query;
+
+  deferred_command_list_.D3DBeginQuery(occlusion_query_heap_.Get(),
+                                       D3D12_QUERY_TYPE_OCCLUSION,
+                                       slot_index);
+}
+
+void D3D12CommandProcessor::EndOcclusionQuery(
+    uint32_t sample_count_address, xe_gpu_depth_sample_counts* sample_counts,
+    bool via_z_pass, bool via_z_fail) {
+  (void)via_z_pass;
+  (void)via_z_fail;
+  if (!occlusion_queries_supported_ || !occlusion_query_heap_) {
+    if (sample_counts) {
+      sample_counts->ZPass_A = 0;
+      sample_counts->Total_A = 0;
+    }
+    return;
+  }
+
+  auto it = occlusion_queries_by_address_.find(sample_count_address);
+  if (it == occlusion_queries_by_address_.end() || !it->second.active) {
+    if (sample_counts) {
+      sample_counts->ZPass_A = 0;
+      sample_counts->Total_A = 0;
+    }
+    return;
+  }
+
+  if (!BeginSubmission(true)) {
+    occlusion_query_free_slots_.push_back(it->second.slot_index);
+    occlusion_queries_by_address_.erase(it);
+    if (sample_counts) {
+      sample_counts->ZPass_A = 0;
+      sample_counts->Total_A = 0;
+    }
+    return;
+  }
+
+  deferred_command_list_.D3DEndQuery(occlusion_query_heap_.Get(),
+                                     D3D12_QUERY_TYPE_OCCLUSION,
+                                     it->second.slot_index);
+  uint64_t destination_offset =
+      uint64_t(it->second.slot_index) * sizeof(uint64_t);
+  deferred_command_list_.D3DResolveQueryData(
+      occlusion_query_heap_.Get(), D3D12_QUERY_TYPE_OCCLUSION,
+      it->second.slot_index, 1, occlusion_query_readback_buffer_.Get(),
+      destination_offset);
+
+  it->second.active = false;
+  it->second.pending_resolve = true;
+  it->second.resolve_submission = submission_current_;
 }
 
 void D3D12CommandProcessor::WriteGammaRampSRV(

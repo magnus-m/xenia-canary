@@ -46,6 +46,13 @@ class NullCommandProcessor : public CommandProcessor {
   bool IssueCopy() override;
 
   void InitializeTrace() override;
+
+  void BeginOcclusionQuery(
+      uint32_t sample_count_address,
+      xe_gpu_depth_sample_counts* sample_counts) override;
+  void EndOcclusionQuery(uint32_t sample_count_address,
+                         xe_gpu_depth_sample_counts* sample_counts,
+                         bool via_z_pass, bool via_z_fail) override;
 };
 
 }  // namespace null

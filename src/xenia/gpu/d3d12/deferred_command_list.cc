@@ -256,6 +256,25 @@ void DeferredCommandList::Execute(ID3D12GraphicsCommandList* command_list,
                   : nullptr);
         }
       } break;
+      case Command::kD3DBeginQuery: {
+        auto& args =
+            *reinterpret_cast<const D3DQueryArguments*>(stream);
+        command_list->BeginQuery(args.query_heap, args.query_type,
+                                 args.index);
+      } break;
+      case Command::kD3DEndQuery: {
+        auto& args =
+            *reinterpret_cast<const D3DQueryArguments*>(stream);
+        command_list->EndQuery(args.query_heap, args.query_type, args.index);
+      } break;
+      case Command::kD3DResolveQueryData: {
+        auto& args = *reinterpret_cast<const D3DResolveQueryDataArguments*>(
+            stream);
+        command_list->ResolveQueryData(args.query_heap, args.query_type,
+                                       args.start_index, args.query_count,
+                                       args.destination_buffer,
+                                       args.destination_offset);
+      } break;
       default:
         assert_unhandled_case(header.command);
         break;

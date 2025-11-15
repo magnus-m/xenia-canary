@@ -54,15 +54,3 @@ DEFINE_bool(
     "at texel centers, or the leftmost/topmost pixels may not be fully covered "
     "when MSAA is used with fullscreen passes.",
     "GPU");
-
-DEFINE_int32(query_occlusion_sample_lower_threshold, 80,
-             "If set to -1 no sample counts are written, games may hang. Else, "
-             "the sample count of every tile will be incremented on every "
-             "EVENT_WRITE_ZPD by this number. Setting this to 0 means "
-             "everything is reported as occluded.",
-             "GPU");
-DEFINE_int32(
-    query_occlusion_sample_upper_threshold, 100,
-    "Set to higher number than query_occlusion_sample_lower_threshold. This "
-    "value is ignored if query_occlusion_sample_lower_threshold is set to -1.",
-    "GPU");

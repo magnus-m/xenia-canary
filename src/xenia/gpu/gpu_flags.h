@@ -26,10 +26,6 @@ DECLARE_bool(non_seamless_cube_map);
 
 DECLARE_bool(half_pixel_offset);
 
-DECLARE_int32(query_occlusion_sample_lower_threshold);
-
-DECLARE_int32(query_occlusion_sample_upper_threshold);
-
 DECLARE_bool(disassemble_pm4);
 
 #define XE_GPU_FINE_GRAINED_DRAW_SCOPES 1

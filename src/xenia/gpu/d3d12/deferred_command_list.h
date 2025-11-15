@@ -405,6 +405,39 @@ class DeferredCommandList {
                     sizeof(D3D12_SAMPLE_POSITION));
   }
 
+  void D3DBeginQuery(ID3D12QueryHeap* query_heap,
+                     D3D12_QUERY_TYPE query_type, UINT index) {
+    auto& args = *reinterpret_cast<D3DQueryArguments*>(
+        WriteCommand(Command::kD3DBeginQuery, sizeof(D3DQueryArguments)));
+    args.query_heap = query_heap;
+    args.query_type = query_type;
+    args.index = index;
+  }
+
+  void D3DEndQuery(ID3D12QueryHeap* query_heap, D3D12_QUERY_TYPE query_type,
+                   UINT index) {
+    auto& args = *reinterpret_cast<D3DQueryArguments*>(
+        WriteCommand(Command::kD3DEndQuery, sizeof(D3DQueryArguments)));
+    args.query_heap = query_heap;
+    args.query_type = query_type;
+    args.index = index;
+  }
+
+  void D3DResolveQueryData(ID3D12QueryHeap* query_heap,
+                           D3D12_QUERY_TYPE query_type, UINT start_index,
+                           UINT query_count, ID3D12Resource* destination,
+                           UINT64 destination_offset) {
+    auto& args = *reinterpret_cast<D3DResolveQueryDataArguments*>(
+        WriteCommand(Command::kD3DResolveQueryData,
+                     sizeof(D3DResolveQueryDataArguments)));
+    args.query_heap = query_heap;
+    args.query_type = query_type;
+    args.start_index = start_index;
+    args.query_count = query_count;
+    args.destination_buffer = destination;
+    args.destination_offset = destination_offset;
+  }
+
  private:
   enum class Command {
     kD3DClearDepthStencilView,
@@ -438,6 +471,9 @@ class DeferredCommandList {
     kD3DSetPipelineState,
     kSetPipelineStateHandle,
     kD3DSetSamplePositions,
+    kD3DBeginQuery,
+    kD3DEndQuery,
+    kD3DResolveQueryData,
   };
 
   struct CommandHeader {
@@ -560,6 +596,21 @@ class DeferredCommandList {
     UINT num_samples_per_pixel;
     UINT num_pixels;
     D3D12_SAMPLE_POSITION sample_positions[16];
+  };
+
+  struct D3DQueryArguments {
+    ID3D12QueryHeap* query_heap;
+    D3D12_QUERY_TYPE query_type;
+    UINT index;
+  };
+
+  struct D3DResolveQueryDataArguments {
+    ID3D12QueryHeap* query_heap;
+    D3D12_QUERY_TYPE query_type;
+    UINT start_index;
+    UINT query_count;
+    ID3D12Resource* destination_buffer;
+    UINT64 destination_offset;
   };
 
   void* WriteCommand(Command command, size_t arguments_size_bytes);

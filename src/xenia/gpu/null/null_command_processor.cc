@@ -53,6 +53,20 @@ bool NullCommandProcessor::IssueCopy() { return true; }
 
 void NullCommandProcessor::InitializeTrace() {}
 
+void NullCommandProcessor::BeginOcclusionQuery(
+    uint32_t sample_count_address,
+    xe_gpu_depth_sample_counts* sample_counts) {}
+
+void NullCommandProcessor::EndOcclusionQuery(
+    uint32_t sample_count_address, xe_gpu_depth_sample_counts* sample_counts,
+    bool via_z_pass, bool via_z_fail) {
+  if (!sample_counts) {
+    return;
+  }
+  sample_counts->ZPass_A = 0;
+  sample_counts->Total_A = 0;
+}
+
 }  // namespace null
 }  // namespace gpu
 }  // namespace xe

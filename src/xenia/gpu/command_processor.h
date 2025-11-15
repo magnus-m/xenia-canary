@@ -248,6 +248,13 @@ class CommandProcessor {
   }
   virtual bool IssueCopy() { return false; }
 
+  virtual void BeginOcclusionQuery(
+      uint32_t sample_count_address,
+      xe_gpu_depth_sample_counts* sample_counts) = 0;
+  virtual void EndOcclusionQuery(uint32_t sample_count_address,
+                                 xe_gpu_depth_sample_counts* sample_counts,
+                                 bool via_z_pass, bool via_z_fail) = 0;
+
   // "Actual" is for the command processor thread, to be read by the
   // implementations.
   SwapPostEffect GetActualSwapPostEffect() const {
